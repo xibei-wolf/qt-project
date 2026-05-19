@@ -1,11 +1,19 @@
 ﻿#include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
+
+#include "network/NetworkClient.h"
 
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
 
     QQmlApplicationEngine engine;
+    // 注册 NetworkClient 单例到 QML 上下文
+    NetworkClient* networkClient = NetworkClient::instance();
+    engine.rootContext()->setContextProperty(QStringLiteral("NetworkClient"),
+                                             networkClient);
+
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreationFailed,
