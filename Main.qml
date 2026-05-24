@@ -55,9 +55,11 @@ Window {
     }
 
     // ============================================================================
-    // doLogin — 一键自动连接 + 认证
+    // doLogin — 一键自动连接 + 认证（防重复发包死锁保护）
     // ============================================================================
     function doLogin() {
+        if (loginLoading) return
+
         var sid = loginStudentId.trim()
         var pwd = loginPassword
         if (sid === "" || pwd === "") return
@@ -66,7 +68,6 @@ Window {
         loginErrorText = ""
 
         if (NetworkClient.connected) {
-            // 已连接 → 直接发送登录验证
             loginConnecting = false
             connStatusText = "正在登录验证…"
             connStatusColor = "#F57C00"
@@ -75,7 +76,6 @@ Window {
                 "password":    pwd
             })
         } else {
-            // 未连接 → 先静默建立安全连接
             loginConnecting = true
             loginErrorText = "正在建立安全连接…"
             connStatusText = "正在建立安全连接…"
@@ -85,11 +85,15 @@ Window {
     }
 
     // ============================================================================
-    // doLogout — 优雅登出，掐断套接字
+    // doLogout — 物理级全线清盘，绝杀切换账号死锁
     // ============================================================================
     function doLogout() {
-        isLoggedIn = false
-        currentUser = ({
+        // 先掐断网络，阻止任何在途回包触发状态变更
+        NetworkClient.disconnectFromServer()
+
+        // 重置所有登录状态字
+        mainWindow.isLoggedIn = false
+        mainWindow.currentUser = ({
             user_id: 0,
             student_id: "",
             name: "",
@@ -97,13 +101,19 @@ Window {
             department_id: 0,
             class_name: ""
         })
-        loginStudentId = ""
-        loginPassword = ""
-        loginErrorText = ""
-        loginLoading = false
-        loginConnecting = false
+        mainWindow.loginStudentId = ""
+        mainWindow.loginPassword = ""
+        mainWindow.loginErrorText = ""
+        mainWindow.loginLoading = false
+        mainWindow.loginConnecting = false
+
+        // 硬清空输入框组件真实显示文本，击碎属性绑定僵死
+        loginStudentIdField.text = ""
+        loginPasswordField.text = ""
+
+        mainWindow.connStatusText = "未连接"
+        mainWindow.connStatusColor = "#9E9E9E"
         tabBar.currentIndex = 0
-        NetworkClient.disconnectFromServer()
     }
 
     // ============================================================================

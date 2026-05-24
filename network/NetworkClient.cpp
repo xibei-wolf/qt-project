@@ -90,12 +90,9 @@ void NetworkClient::connectToServer(const QString& ip, quint16 port)
 
 void NetworkClient::disconnectFromServer()
 {
-    if (m_socket->state() == QAbstractSocket::ConnectedState) {
-        m_socket->disconnectFromHost();
-    }
-    if (m_socket->state() == QAbstractSocket::ConnectingState) {
-        m_socket->abort();
-    }
+    m_socket->abort();       // 强行物理中止，瞬间拔掉 TCP 管道
+    m_readBuffer.clear();
+    setConnected(false);
 }
 
 // ============================================================================

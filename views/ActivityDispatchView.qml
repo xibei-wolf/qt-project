@@ -1,9 +1,13 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../js/EventRecurrenceLogic.js" as EventLogic
 
 // ============================================================================
 // ActivityDispatchView.qml — 活动排班 / 活动互动 双模式视图
+//
+// FILTER_AVAILABLE_MEMBERS 请求体（与后端 Muduo 协议对齐）：
+//   { activity_week: int, day_of_week: int (1=Mon), time_mask: uint32 }
 //
 // 模式分流（RBAC）：
 //   角色 10/20/30（老师/队长/部长）→ 管理员排班模式
@@ -43,6 +47,15 @@ Item {
             case 2: return "#E65100"
             case 3: return "#757575"
             default: return "#9E9E9E"
+        }
+    }
+
+    function recurrenceLabel(r) {
+        switch (r) {
+            case "once":     return "单次"
+            case "weekly":   return "每周"
+            case "biweekly": return "每两周"
+            default:         return r || "单次"
         }
     }
 
@@ -133,17 +146,17 @@ Item {
     }
     function stateTextColor(st) {
         switch (st) {
-            case "free":          return "#2E7D32"
-            case "busy_activity": return "#E65100"
-            case "busy_course":   return "#C62828"
+            case "free":          return "#2E7D32"  // 绿色：可指派
+            case "busy_activity": return "#C62828"  // 红色：已有活动冲突
+            case "busy_course":   return "#F57F17"  // 黄色：课程冲突
             default:              return "#2E7D32"
         }
     }
     function stateBgColor(st) {
         switch (st) {
-            case "free":          return "#E8F5E9"
-            case "busy_activity": return "#FFF3E0"
-            case "busy_course":   return "#FFEBEE"
+            case "free":          return "#E8F5E9"  // 浅绿背景
+            case "busy_activity": return "#FFEBEE"  // 浅红背景
+            case "busy_course":   return "#FFF8E1"  // 浅黄背景
             default:              return "#E8F5E9"
         }
     }
@@ -378,15 +391,16 @@ Item {
                                     font.pixelSize: 13
                                 }
                                 Text {
-                                    text: "Week " + model.activityWeek
-                                          + " · mask=0x" + model.timeMask.toString(16).toUpperCase()
-                                          + " · " + (model.location || "")
-                                          + " · " + statusLabel(model.status)
+                                    text: (model.startDate || "?") + " ~ " + (model.endDate || "?")
+                                          + "  " + (model.startTime || "") + "-" + (model.endTime || "")
+                                          + "  " + (model.location || "")
+                                          + "  " + statusLabel(model.status)
                                     font.pixelSize: 10
                                     color: "#888888"
                                 }
                                 Text {
-                                    text: "DB ID: " + (model.db_id || "—")
+                                    text: "重复: " + recurrenceLabel(model.recurrence)
+                                          + " · db_id=" + (model.db_id || "—")
                                     font.pixelSize: 9
                                     color: "#BBBBBB"
                                 }
@@ -478,9 +492,13 @@ Item {
 
                         onClicked: {
                             var preset = activityPresetModel.get(activityCombo.currentIndex)
+                            var dayOfWeek = preset.startDate
+                                ? EventLogic.dayOfWeek(EventLogic.parseDate(preset.startDate))
+                                : 1
                             var payload = {
-                                "activity_week": preset.activityWeek,
-                                "time_mask":     preset.timeMask
+                                "activity_week": preset.activityWeek || 0,
+                                "day_of_week":   dayOfWeek,
+                                "time_mask":     preset.timeMask     || 0
                             }
 
                             console.log("发送 FILTER_AVAILABLE_MEMBERS:", JSON.stringify(payload))
@@ -564,10 +582,15 @@ Item {
                     visible: activityCombo.currentIndex >= 0
                     text: {
                         var p = activityPresetModel.get(activityCombo.currentIndex)
-                        return "当前筛选: Week " + p.activityWeek
-                               + " · time_mask=0x" + p.timeMask.toString(16).toUpperCase()
+                        return "筛选: W" + (p.activityWeek || "?")
+                               + " D" + (p.startDate
+                                   ? EventLogic.dayOfWeek(EventLogic.parseDate(p.startDate))
+                                   : "?")
+                               + " mask=" + (p.timeMask || "?")
+                               + "  " + (p.startDate || "?")
+                               + " " + (p.startTime || "") + "-" + (p.endTime || "")
                                + " · " + p.name
-                               + " [db_id=" + (p.db_id || "—") + "]"
+                               + " [id=" + (p.db_id || "—") + "]"
                     }
                     font.pixelSize: 11
                     color: "#888888"
@@ -737,9 +760,10 @@ Item {
                         spacing: 0
 
                         Text { text: "ID";   font.bold: true; Layout.preferredWidth: 40 }
-                        Text { text: "活动名称"; font.bold: true; Layout.preferredWidth: 240 }
-                        Text { text: "周数"; font.bold: true; Layout.preferredWidth: 50 }
-                        Text { text: "地点"; font.bold: true; Layout.preferredWidth: 100 }
+                        Text { text: "活动名称"; font.bold: true; Layout.preferredWidth: 180 }
+                        Text { text: "日期"; font.bold: true; Layout.preferredWidth: 130 }
+                        Text { text: "时间"; font.bold: true; Layout.preferredWidth: 80 }
+                        Text { text: "地点"; font.bold: true; Layout.preferredWidth: 80 }
                         Text { text: "状态"; font.bold: true; Layout.preferredWidth: 80 }
                         Item { Layout.fillWidth: true }
                         Text { text: "操作"; font.bold: true; Layout.preferredWidth: 200 }
@@ -788,30 +812,34 @@ Item {
                             // 活动名称
                             Text {
                                 text: model.name || "-"
-                                Layout.preferredWidth: 240
+                                Layout.preferredWidth: 180
                                 font.pixelSize: 13
                                 font.bold: true
                                 elide: Text.ElideRight
                             }
 
-                            // 周数
-                            Rectangle {
-                                Layout.preferredWidth: 44; height: 22
-                                radius: 11
-                                color: "#E3F2FD"
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "W" + (model.activityWeek || 0)
-                                    font.pixelSize: 11
-                                    font.bold: true
-                                    color: "#1565C0"
-                                }
+                            // 日期
+                            Text {
+                                text: (model.startDate || "?") + " ~ " + (model.endDate || "?")
+                                Layout.preferredWidth: 130
+                                font.pixelSize: 11
+                                color: "#555555"
+                                elide: Text.ElideRight
+                            }
+
+                            // 时间
+                            Text {
+                                text: (model.startTime || "") + "-" + (model.endTime || "")
+                                Layout.preferredWidth: 80
+                                font.pixelSize: 11
+                                color: "#555555"
+                                elide: Text.ElideRight
                             }
 
                             // 地点
                             Text {
                                 text: model.location || "-"
-                                Layout.preferredWidth: 100
+                                Layout.preferredWidth: 80
                                 font.pixelSize: 12
                                 color: "#555555"
                                 elide: Text.ElideRight
@@ -987,11 +1015,18 @@ Item {
                         var act = activities[k]
                         activityPresetModel.append({
                             name:         act.title         || "",
-                            activityWeek: act.activity_week || 0,
-                            timeMask:     act.time_mask     || 0,
                             db_id:        act.activity_id   || 0,
                             location:     act.location      || "",
-                            status:       act.status        || 1
+                            status:       act.status        || 1,
+                            startDate:    act.start_date    || "",
+                            endDate:      act.end_date      || "",
+                            startTime:    act.start_time    || "",
+                            endTime:      act.end_time      || "",
+                            activityWeek: act.activity_week || 0,
+                            timeMask:     act.time_mask     || 0,
+                            recurrence:   act.period_type === 1 ? EventLogic.RECUR_WEEKLY
+                                        : act.period_type === 2 ? EventLogic.RECUR_BIWEEKLY
+                                        : EventLogic.RECUR_ONCE
                         })
                     }
 

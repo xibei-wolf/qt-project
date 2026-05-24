@@ -1,6 +1,7 @@
 ﻿import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../js/EventRecurrenceLogic.js" as EventLogic
 
 Item {
     id: root
@@ -9,6 +10,32 @@ Item {
     property int editingCellIndex: -1
     property bool isManager: mainWindow.isLoggedIn && mainWindow.currentUser.role_id <= 30
     property string currentSelectedClass: ""
+
+    // 节次 → 时间范围映射（第1-2节=08:00~09:50, 第3-4节=10:10~12:00, ...）
+    property var periodTimeMap: [
+        { startH: 8,  startM: 0,  endH: 9,  endM: 50 },   // period 0: 第1-2节
+        { startH: 10, startM: 10, endH: 12, endM: 0  },   // period 1: 第3-4节
+        { startH: 14, startM: 10, endH: 16, endM: 0  },   // period 2: 第5-6节
+        { startH: 16, startM: 10, endH: 18, endM: 0  },   // period 3: 第7-8节
+        { startH: 18, startM: 30, endH: 20, endM: 10 },   // period 4: 第9-10节
+        { startH: 19, startM: 30, endH: 21, endM: 10 }    // period 5: 第11-12节
+    ]
+
+    function periodTimeMask(periodIndex) {
+        if (periodIndex < 0 || periodIndex >= periodTimeMap.length) return 0
+        var t = periodTimeMap[periodIndex]
+        return EventLogic.calculateTimeMask(t.startH, t.startM, t.endH, t.endM)
+    }
+
+    function periodTimeLabel(periodIndex) {
+        if (periodIndex < 0 || periodIndex >= periodTimeMap.length) return ""
+        var t = periodTimeMap[periodIndex]
+        var sh = t.startH < 10 ? "0" + t.startH : t.startH
+        var sm = t.startM < 10 ? "0" + t.startM : t.startM
+        var eh = t.endH < 10 ? "0" + t.endH : t.endH
+        var em = t.endM < 10 ? "0" + t.endM : t.endM
+        return sh + ":" + sm + "-" + eh + ":" + em
+    }
 
     onVisibleChanged: {
         if (visible && isManager && adminClassModel.count === 0 && NetworkClient.connected) {
@@ -48,7 +75,9 @@ Item {
                     course_name: "",
                     start_week: 1,
                     end_week: 16,
-                    week_type: 0
+                    week_type: 0,
+                    time_mask: periodTimeMask(period),
+                    time_label: periodTimeLabel(period)
                 })
             }
         }
@@ -217,7 +246,14 @@ Item {
                 spacing: 4
                 Rectangle { width: 60; height: 32; color: "transparent" }
                 Repeater {
-                    model: ["第1-2节\n08:00", "第3-4节\n10:10", "第5-6节\n14:10", "第7-8节\n16:10", "第9-10节\n18:30", "第11-12节\n19:30"]
+                    model: [
+                        "第1-2节\n" + periodTimeLabel(0),
+                        "第3-4节\n" + periodTimeLabel(1),
+                        "第5-6节\n" + periodTimeLabel(2),
+                        "第7-8节\n" + periodTimeLabel(3),
+                        "第9-10节\n" + periodTimeLabel(4),
+                        "第11-12节\n" + periodTimeLabel(5)
+                    ]
                     Rectangle {
                         width: 60; height: 44; color: "#ECEFF1"; radius: 4
                         Text { anchors.centerIn: parent; text: modelData; font.pixelSize: 9; horizontalAlignment: Text.AlignHCenter; color: "#546E7A" }
@@ -328,9 +364,15 @@ Item {
     Dialog {
         id: courseEditDialog
         title: "编辑课程详细策略"
-        modal: true; width: 320; height: 280
+        modal: true; width: 320; height: 300
         ColumnLayout {
             anchors.fill: parent; spacing: 10
+            Text {
+                text: editingCellIndex >= 0
+                      ? "时段: " + (scheduleModel.get(editingCellIndex).time_label || "")
+                      : ""
+                font.pixelSize: 12; color: "#E65100"; font.bold: true
+            }
             RowLayout {
                 Text { text: "课程名:"; Layout.preferredWidth: 50 }
                 TextField { id: editCourseName; Layout.fillWidth: true }
@@ -366,13 +408,20 @@ Item {
         for (var i = 0; i < scheduleModel.count; ++i) {
             var cell = scheduleModel.get(i)
             if (!cell.has_course) continue
+            var t = periodTimeMap[cell.period] || periodTimeMap[0]
+            var mask = EventLogic.calculateTimeMask(t.startH, t.startM, t.endH, t.endM)
+            var st = (t.startH < 10 ? "0" + t.startH : t.startH) + ":" + (t.startM < 10 ? "0" + t.startM : t.startM) + ":00"
+            var et = (t.endH < 10 ? "0" + t.endH : t.endH) + ":" + (t.endM < 10 ? "0" + t.endM : t.endM) + ":00"
             arr.push({
                 "course_name": cell.course_name.trim() === "" ? "有课" : cell.course_name,
                 "day_of_week": cell.day + 1,
                 "period": cell.period + 1,
                 "start_week": cell.start_week,
                 "end_week": cell.end_week,
-                "week_type": cell.week_type
+                "week_type": cell.week_type,
+                "time_mask":  mask,
+                "start_time": st,
+                "end_time":   et
             })
         }
         return arr

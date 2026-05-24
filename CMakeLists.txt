@@ -26,6 +26,7 @@ qt_add_qml_module(appQinyun
         views/AddActivityDialog.qml
         views/MemberManagementView.qml
         views/ScheduleUploadView.qml
+        js/EventRecurrenceLogic.js
     SOURCES
         network/NetworkClient.h
 )
@@ -41,9 +42,6 @@ target_link_libraries(appQinyun
     PRIVATE Qt6::Quick Qt6::Network
 )
 
-# ============================================================================
-# ## 核心新增：解决 Windows 侧 VS Code/Qt Creator 头文件报红的黄金补丁
-# ============================================================================
 # 1. 强制把当前目录和子目录（network）加入编译器的头文件搜索路径
 target_include_directories(appQinyun PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

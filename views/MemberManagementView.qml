@@ -50,7 +50,7 @@ Item {
         }
     }
 
-    // ---- 运行时状态标签 ----
+    // ---- 运行时状态徽章 ----
     function stateLabel(st) {
         switch (st) {
             case "busy_activity": return "活动中"
@@ -61,9 +61,9 @@ Item {
     }
     function stateBadgeColor(st) {
         switch (st) {
-            case "busy_activity": return "#E65100"
-            case "busy_course":   return "#C62828"
-            case "free":          return "#2E7D32"
+            case "busy_activity": return "#C62828"  // 红色：已有活动冲突
+            case "busy_course":   return "#F9A825"  // 黄色：课程冲突
+            case "free":          return "#2E7D32"  // 绿色：可指派
             default:              return "#9E9E9E"
         }
     }
