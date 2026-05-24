@@ -1,25 +1,13 @@
 // ============================================================================
 // NetworkClient.cpp — 青云志愿服务队管理系统 · 网络客户端实现
 //
-// TCP 粘包/半包处理策略：
+// 非对称网关协议：
 //
-//   粘包（Sticky Packet）：
-//     一个 readyRead 信号携带多个完整报文。
-//     → while 循环反复 tryExtractPacket()，直到可读数据不足。
+//   【上行】客户端 → 服务端：4B 大端长度头 + JSON Body
+//          后端 tryExtractPacket 严格解析 4 字节大端长度头。
 //
-//   半包（Half Packet / Fragmentation）：
-//     一个报文跨 TCP 分段到达。
-//     → m_nextBlockSize 记录预期的 Body 长度，数据不足时 return 挂起，
-//       等待下一次 readyRead 信号继续读取。
-//
-// 状态机：
-//   m_nextBlockSize == 0  →  等待读取 4 字节 Header
-//   m_nextBlockSize >  0  →  等待读取 m_nextBlockSize 字节 Body
-//
-// 与 Linux Muduo 服务端的字节序一致性：
-//   本端写入: QDataStream + BigEndian → 网络字节序（大端）
-//   对端读取: ntohl() → 主机字节序
-//   信号触发：responseReceived(action, data) → QML slot
+//   【下行】服务端 → 客户端：纯明文裸流 JSON
+//          后端 sendResponse 直接吐出裸 JSON，无任何头部封装。
 // ============================================================================
 
 #include "NetworkClient.h"
@@ -27,6 +15,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDebug>
+#include <QFile>
+#include <QStringDecoder>
 
 // ============================================================================
 // 单例实现
@@ -47,11 +37,9 @@ NetworkClient::NetworkClient(QObject* parent)
     , m_socket(new QTcpSocket(this))
     , m_connectTimer(new QTimer(this))
 {
-    // ---------- 连接信号 → 内部槽 ----------
     connect(m_socket, &QTcpSocket::connected,
             this, &NetworkClient::slotConnected);
 
-    // Qt 6 使用 errorOccurred 取代 Qt 5 的 error() 信号
     connect(m_socket, &QTcpSocket::errorOccurred,
             this, &NetworkClient::slotErrorOccurred);
 
@@ -61,7 +49,6 @@ NetworkClient::NetworkClient(QObject* parent)
     connect(m_socket, &QTcpSocket::readyRead,
             this, &NetworkClient::slotReadyRead);
 
-    // ---------- 连接超时定时器 ----------
     m_connectTimer->setSingleShot(true);
     connect(m_connectTimer, &QTimer::timeout,
             this, &NetworkClient::slotConnectTimeout);
@@ -80,32 +67,24 @@ NetworkClient::~NetworkClient()
 
 void NetworkClient::connectToServer(const QString& ip, quint16 port)
 {
-    // 若已连接到相同地址，忽略重复请求
     if (m_connected && m_remoteHost == ip && m_remotePort == port) {
         qDebug() << "[NetworkClient] Already connected to" << ip << port;
         return;
     }
 
-    // 若当前有连接，先断开
     if (m_socket->state() != QAbstractSocket::UnconnectedState) {
         qDebug() << "[NetworkClient] Disconnecting from previous host...";
-        m_socket->abort();  // 立即中止（不等握手完成）
+        m_socket->abort();
     }
 
-    // 重置解包状态机
-    m_nextBlockSize = 0;
     m_readBuffer.clear();
 
-    // 记录目标地址
     m_remoteHost = ip;
     m_remotePort = port;
 
     qDebug() << "[NetworkClient] Connecting to" << ip << port << "...";
 
-    // 发起异步连接
     m_socket->connectToHost(ip, port);
-
-    // 启动连接超时定时器
     m_connectTimer->start(kConnectTimeoutMs);
 }
 
@@ -114,24 +93,16 @@ void NetworkClient::disconnectFromServer()
     if (m_socket->state() == QAbstractSocket::ConnectedState) {
         m_socket->disconnectFromHost();
     }
-    // 若正在连接中，直接中止
     if (m_socket->state() == QAbstractSocket::ConnectingState) {
         m_socket->abort();
     }
 }
 
 // ============================================================================
-// sendRequest — 封包发送
+// sendRequest —【上行】封包发送：4B 大端长度头 + JSON Body
 //
-// 封包流程：
-//   1. 将 action 注入 JSON Body（保证服务端路由可用）
-//   2. JSON → QByteArray (Compact 格式，无多余空白)
-//   3. 构建 [4B BigEndian len][JSON bytes]
-//   4. 写入 socket
-//
-// 协议示例（发送 LOGIN 请求）：
-//   Header:  00 00 00 37                          (0x37 = 55 字节)
-//   Body:    {"action":"LOGIN","student_id":"2021001","password":"hash"}
+// 后端 BusinessServer::tryExtractPacket 严格依赖前 4 字节大端 uint32_t
+// 作为 Body 长度。此处必须与后端完全对齐。
 // ============================================================================
 
 void NetworkClient::sendRequest(const QString&    action,
@@ -143,7 +114,6 @@ void NetworkClient::sendRequest(const QString&    action,
         return;
     }
 
-    // 第 1 步：构建完整 JSON
     QJsonObject fullJson = body;
     fullJson[QStringLiteral("action")] = action;
 
@@ -156,18 +126,15 @@ void NetworkClient::sendRequest(const QString&    action,
         return;
     }
 
-    // 第 2 步：构建网络字节序 Header
+    // 构建 [4B BigEndian len][JSON bytes] 总包
     QByteArray packet;
     {
         QDataStream stream(&packet, QIODevice::WriteOnly);
         stream.setByteOrder(QDataStream::BigEndian);
-        // 写入 4 字节大端 uint32_t Body 长度
         stream << static_cast<quint32>(jsonBytes.size());
     }
-    // 第 3 步：拼接 Body
     packet.append(jsonBytes);
 
-    // 第 4 步：写入 TCP 发送缓冲区
     qint64 written = m_socket->write(packet);
     if (written != packet.size()) {
         qWarning() << "[NetworkClient] write incomplete:"
@@ -176,6 +143,41 @@ void NetworkClient::sendRequest(const QString&    action,
         qDebug() << "[NetworkClient] Sent" << action
                  << "—" << jsonBytes.size() << "bytes";
     }
+}
+
+// ============================================================================
+// readLocalFileGbk — GBK/UTF-8 自适应文件读取
+// ============================================================================
+
+QString NetworkClient::readLocalFileGbk(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "[NetworkClient] Cannot open file:" << path;
+        return {};
+    }
+
+    QByteArray raw = file.readAll();
+    file.close();
+
+    if (raw.isEmpty())
+        return {};
+
+    {
+        QStringDecoder utf8Decoder(QStringDecoder::Utf8);
+        QString decoded = utf8Decoder.decode(raw);
+        if (!decoded.contains(QChar::ReplacementCharacter))
+            return decoded;
+    }
+
+    {
+        QStringDecoder gbkDecoder("GB18030");
+        if (gbkDecoder.isValid()) {
+            return gbkDecoder.decode(raw);
+        }
+    }
+
+    return QString::fromLatin1(raw);
 }
 
 // ============================================================================
@@ -233,8 +235,6 @@ void NetworkClient::slotDisconnected()
 
     qDebug() << "[NetworkClient] Disconnected from" << m_remoteHost;
 
-    // 重置解包状态机（防止残留状态影响下次连接）
-    m_nextBlockSize = 0;
     m_readBuffer.clear();
 
     setConnected(false);
@@ -249,7 +249,7 @@ void NetworkClient::slotConnectTimeout()
     qWarning() << "[NetworkClient] Connection timeout to"
                << m_remoteHost << m_remotePort;
 
-    m_socket->abort();  // 触发 slotDisconnected + slotErrorOccurred
+    m_socket->abort();
 
     emit connectionError(
         QStringLiteral("连接超时：无法连接到 %1:%2")
@@ -258,107 +258,76 @@ void NetworkClient::slotConnectTimeout()
 }
 
 // ============================================================================
-// slotReadyRead — TCP 粘包/半包处理核心
+// slotReadyRead —【下行】明文粘包自适应分割状态机
 //
-// 【核心逻辑】
-//   本槽函数由 QTcpSocket::readyRead 信号触发，运行在主线程事件循环中。
-//   QTcpSocket 内置的读取缓冲区已经接收了 TCP 字节流，我们使用 m_nextBlockSize
-//   作为简易状态机来决定当前是应该读取 Header 还是 Body。
+// 后端 sendResponse 吐出裸 JSON 字节流，无长度头。
+// 当多个响应在 TCP 接收缓冲区发生连环粘包时，通过大括号计数器
+// 精准定位每个独立 JSON 对象的物理边界，逐个切出发射。
 //
-// 【状态机流程】
-//   ┌──────────────┐      bytesAvailable >= 4      ┌──────────────┐
-//   │ WAIT_HEADER   │ ─────────────────────────►    │ WAIT_BODY    │
-//   │ m_next=0      │                               │ m_next=N     │
-//   └──────┬────────┘                               └──────┬───────┘
-//          │  bytesAvailable < 4                          │ bytesAvailable >= N
-//          ▼  (return)                                    ▼
-//       [等待下次                                          读取 N 字节 Body
-//        readyRead]                                        → 解析 JSON
-//                                                          → 发射信号
-//                                                          → m_next = 0 (回到 WAIT_HEADER)
-//
-// 【粘包】while 循环保证连续解出多个报文
-// 【半包】return 挂起，QTcpSocket 内部缓冲区保留未完成数据
+// 半包处理：若当前缓冲区内的字节无法构成完整 JSON（大括号未闭环），
+// 则保留残余数据挂起等待下次 readyRead 拼接。
 // ============================================================================
 
 void NetworkClient::slotReadyRead()
 {
-    // 将新到达的数据追加到本地缓冲区
-    QByteArray newData = m_socket->readAll();
-    m_readBuffer.append(newData);
+    m_readBuffer.append(m_socket->readAll());
 
-    // ================================================================
-    // 循环解包 —— 一次处理缓冲区中所有完整报文
-    // ================================================================
-    while (true) {
-        // ---------- 状态 1：等待 / 解析 Header（4 字节大端长度）----------
-        if (m_nextBlockSize == 0) {
-            // Header 不完整 → 挂起等待更多数据
-            if (m_readBuffer.size() < kHeaderSize) {
-                return;
-            }
+    while (m_readBuffer.size() > 0) {
+        int braceCount = 0;
+        int packetLength = 0;
+        bool foundPacket = false;
 
-            // 从缓冲区头部解析 4 字节大端 uint32_t
-            QDataStream stream(m_readBuffer.left(kHeaderSize));
-            stream.setByteOrder(QDataStream::BigEndian);
-            stream >> m_nextBlockSize;
-
-            // 移除已消费的 Header
-            m_readBuffer.remove(0, kHeaderSize);
-
-            // 合法性校验
-            if (m_nextBlockSize == 0) {
-                // 空 Body 报文（合法，如心跳响应）
-                // 直接视为一条完整报文，触发分发
-                processEmptyPacket();
-                continue;  // 继续循环，可能后续还有粘包数据
-            }
-
-            if (m_nextBlockSize > kMaxBodyLen) {
-                // 协议异常：Body 长度超出上限。
-                // 无法确定后续数据的对齐边界 → 清空缓冲区并断开连接。
-                qWarning() << "[NetworkClient] Protocol error: bodyLen"
-                           << m_nextBlockSize << "exceeds max"
-                           << kMaxBodyLen;
-                m_readBuffer.clear();
-                m_nextBlockSize = 0;
-                m_socket->abort();
-                emit connectionError(
-                    QStringLiteral("协议错误：报文长度 %1 超出上限").arg(m_nextBlockSize));
-                return;
+        for (int i = 0; i < m_readBuffer.size(); ++i) {
+            char ch = m_readBuffer.at(i);
+            if (ch == '{') {
+                braceCount++;
+            } else if (ch == '}') {
+                braceCount--;
+                if (braceCount == 0) {
+                    packetLength = i + 1;
+                    foundPacket = true;
+                    break;
+                }
             }
         }
 
-        // ---------- 状态 2：等待 Body 完整到达 ----------
-        // m_nextBlockSize > 0 且 m_readBuffer 可能仍不足
-        if (static_cast<quint32>(m_readBuffer.size()) < m_nextBlockSize) {
-            // 半包：Body 尚未完全到达 → 保留 m_nextBlockSize 和 m_readBuffer，
-            //       等待下次 readyRead 追加数据后继续读取
-            return;
+        if (!foundPacket) {
+            break;  // 半包：大括号未闭环，保留 m_readBuffer 挂起等待
         }
 
-        // ---------- Body 完整到达，切出 JSON ----------
-        QByteArray jsonData = m_readBuffer.left(m_nextBlockSize);
-        m_readBuffer.remove(0, m_nextBlockSize);
-        m_nextBlockSize = 0;   // 重置状态机 → 回到 WAIT_HEADER
+        QByteArray singleJsonData = m_readBuffer.left(packetLength);
+        m_readBuffer.remove(0, packetLength);
 
-        // ---------- 解析 JSON 并发射信号 ----------
-        processJsonPacket(jsonData);
-
-        // 继续循环：检查 m_readBuffer 中是否还有粘包数据
+        if (!singleJsonData.isEmpty()) {
+            processJsonPacket(singleJsonData);
+        }
     }
 }
 
 // ============================================================================
-// 内部辅助方法
+// slotErrorOccurred — 套接字异常处理
 // ============================================================================
 
-void NetworkClient::processEmptyPacket()
+void NetworkClient::slotErrorOccurred(QAbstractSocket::SocketError error)
 {
-    // 空 Body 报文（心跳等）→ 发射空响应通知 QML
-    qDebug() << "[NetworkClient] Received empty body packet (heartbeat)";
-    emit responseReceived(QStringLiteral("heartbeat"), QJsonObject());
+    Q_UNUSED(error)
+
+    QString errorMsg = m_socket->errorString();
+
+    qWarning() << "[NetworkClient] Socket error:" << errorMsg;
+
+    m_connectTimer->stop();
+
+    if (m_socket->state() != QAbstractSocket::ConnectedState) {
+        setConnected(false);
+    }
+
+    emit connectionError(QStringLiteral("网络错误: %1").arg(errorMsg));
 }
+
+// ============================================================================
+// processJsonPacket — JSON 解析与信号发射
+// ============================================================================
 
 void NetworkClient::processJsonPacket(const QByteArray& jsonData)
 {
@@ -381,7 +350,6 @@ void NetworkClient::processJsonPacket(const QByteArray& jsonData)
 
     QJsonObject obj = doc.object();
 
-    // 提取标识字段：优先 action，其次 status
     QString action = obj.value(QStringLiteral("action")).toString();
     if (action.isEmpty()) {
         action = obj.value(QStringLiteral("status")).toString();
@@ -392,26 +360,4 @@ void NetworkClient::processJsonPacket(const QByteArray& jsonData)
              << "size =" << jsonData.size() << "bytes";
 
     emit responseReceived(action, obj);
-}
-
-// ============================================================================
-// slotErrorOccurred — 套接字异常处理（Qt 6）
-// ============================================================================
-
-void NetworkClient::slotErrorOccurred(QAbstractSocket::SocketError error)
-{
-    Q_UNUSED(error)
-
-    QString errorMsg = m_socket->errorString();
-
-    qWarning() << "[NetworkClient] Socket error:" << errorMsg;
-
-    m_connectTimer->stop();
-
-    // 仅当非正常断开时才通知 UI
-    if (m_socket->state() != QAbstractSocket::ConnectedState) {
-        setConnected(false);
-    }
-
-    emit connectionError(QStringLiteral("网络错误: %1").arg(errorMsg));
 }

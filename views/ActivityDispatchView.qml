@@ -416,6 +416,8 @@ Item {
                         }
                     }
 
+                    Text { text: "部门:"; font.pixelSize: 12; color: "#555555" }
+
                     ComboBox {
                         id: deptCombo
                         Layout.preferredWidth: 100
@@ -424,6 +426,8 @@ Item {
                         currentIndex: 0
                         onCurrentIndexChanged: root.applyLocalSchedulingFilters()
                     }
+
+                    Text { text: "角色:"; font.pixelSize: 12; color: "#555555" }
 
                     ComboBox {
                         id: roleFilterCombo
@@ -434,6 +438,8 @@ Item {
                         onCurrentIndexChanged: root.applyLocalSchedulingFilters()
                     }
 
+                    Text { text: "性别:"; font.pixelSize: 12; color: "#555555" }
+
                     ComboBox {
                         id: genderFilterCombo
                         Layout.preferredWidth: 100
@@ -442,6 +448,8 @@ Item {
                         currentIndex: 0
                         onCurrentIndexChanged: root.applyLocalSchedulingFilters()
                     }
+
+                    Text { text: "排序:"; font.pixelSize: 12; color: "#555555" }
 
                     ComboBox {
                         id: sortCombo

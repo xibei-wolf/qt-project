@@ -20,6 +20,12 @@ qt_add_qml_module(appQinyun
     URI Qinyun
     QML_FILES
         Main.qml
+        views/ActivityDispatchView.qml
+        views/ActivityManagementView.qml
+        views/ActivitySchedulerDialog.qml
+        views/AddActivityDialog.qml
+        views/MemberManagementView.qml
+        views/ScheduleUploadView.qml
     SOURCES
         network/NetworkClient.h
 )

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(diff \"c:/myStudyResource/QinyunMng/main.cpp\" \"c:/myStudyResource/qt-project/main.cpp\")",
+      "Read(//c/myStudyResource/qt-project/**)"
+    ]
+  }
+}
