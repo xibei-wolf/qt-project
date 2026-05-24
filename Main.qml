@@ -1,4 +1,4 @@
-import QtQuick
+﻿import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
@@ -117,6 +117,11 @@ Window {
     }
 
     // ============================================================================
+    // 全局信号 — 数据就绪通知（子页面唯一加载驱动入口）
+    // ============================================================================
+    signal userDataReady()
+
+    // ============================================================================
     // 全局信号拦截 — 自动登录通道核心
     // ============================================================================
     Connections {
@@ -180,6 +185,7 @@ Window {
                 if (data.status === "ok" || data.code === 0) {
                     var ud = data.data
                     if (ud) {
+                        console.log("DEBUG: Received class_name from server:", ud.class_name); // 看看这里是否能打印出班级
                         mainWindow.currentUser = {
                             user_id:       ud.user_id       || ud.id || 0,
                             student_id:    ud.student_id    || loginStudentId,
@@ -200,6 +206,9 @@ Window {
                         } else {
                             tabBar.currentIndex = 0  // 活动管理
                         }
+
+                        // 通知所有子页面：用户数据已完整就绪（class_name 已同步）
+                        mainWindow.userDataReady()
                     }
                 } else {
                     mainWindow.loginErrorText = "登录失败: " + (data.message || "用户名或密码错误")
@@ -419,7 +428,15 @@ Window {
                     id: tabBar
                     Layout.fillWidth: true
 
+                    onCurrentIndexChanged: {
+                        // role40 禁止访问 活动管理(0) / 成员管理(1)，自动重定向
+                        if (isRole40 && currentIndex < 2) {
+                            currentIndex = 3  // 回弹到课表上传
+                        }
+                    }
+
                     TabButton {
+                        enabled: !isRole40
                         text: "⚙️ 活动管理"
                         width: implicitWidth + 20
                         contentItem: Text {
@@ -440,6 +457,7 @@ Window {
                     }
 
                     TabButton {
+                        enabled: !isRole40
                         text: "👥 成员管理"
                         width: implicitWidth + 20
                         contentItem: Text {
@@ -521,6 +539,7 @@ Window {
                 }
 
                 StackLayout {
+                    id: stackLayout
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     currentIndex: tabBar.currentIndex

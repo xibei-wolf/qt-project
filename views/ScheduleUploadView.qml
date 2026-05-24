@@ -10,6 +10,7 @@ Item {
     property int editingCellIndex: -1
     property bool isManager: mainWindow.isLoggedIn && mainWindow.currentUser.role_id <= 30
     property string currentSelectedClass: ""
+    property string currentMode: "private"   // "private" = 个人课表, "public" = 班级公共课表
 
     // 节次 → 时间范围映射（第1-2节=08:00~09:50, 第3-4节=10:10~12:00, ...）
     property var periodTimeMap: [
@@ -38,10 +39,7 @@ Item {
     }
 
     onVisibleChanged: {
-        if (visible && isManager && adminClassModel.count === 0 && NetworkClient.connected) {
-            console.log("View visible, network active — pulling registered classes roster")
-            NetworkClient.sendRequest("GET_REGISTERED_CLASSES", {})
-        }
+        // 视图显示时不再主动发包；所有数据由 userDataReady / classSelector / 保存成功 三路驱动
     }
 
     // ---- 班级下拉模型（管理端动态拉取已注册班级） ----
@@ -65,6 +63,7 @@ Item {
     }
 
     function initEmptyGrid() {
+        console.log("VERIFY initEmptyGrid BEFORE — scheduleModel.count:", scheduleModel.count)
         scheduleModel.clear()
         for (var period = 0; period < 6; ++period) {
             for (var day = 0; day < 5; ++day) {
@@ -81,34 +80,73 @@ Item {
                 })
             }
         }
+        console.log("VERIFY initEmptyGrid AFTER — scheduleModel.count:", scheduleModel.count)
     }
 
     // ================================================================
     // 数据核心控制引擎（拉取与平铺）
     // ================================================================
+    // 防重入锁：阻止并发信号触发重复发包
+    property bool isLoading: false
+
     function loadTargetSchedule() {
+        // 防重入锁：避免并发信号同时触发造成重复发包
+        if (isLoading) {
+            console.log("DEBUG: loadTargetSchedule skipped — already loading")
+            return
+        }
+
+        var targetClassName = ""
+        var isPublicFlag = false
+
+        if (isManager && currentMode === "public") {
+            targetClassName = String(currentSelectedClass).trim()
+            isPublicFlag = true
+            if (targetClassName === "") {
+                uploadFeedback.text = "请先在左侧下拉框中选择目标班级"
+                uploadFeedback.color = "#C62828"
+                return
+            }
+        } else {
+            targetClassName = String(mainWindow.currentUser.class_name || "").trim()
+            isPublicFlag = false
+
+            // 严苛参数校验：class_name 为空直接拒绝，不重试
+            if (targetClassName === "") {
+                console.error("Critical: loadTargetSchedule 触发时 class_name 为空，拒绝请求！")
+                uploadFeedback.text = "班级信息未同步，请重新登录"
+                uploadFeedback.color = "#C62828"
+                return
+            }
+        }
+
+        isLoading = true
         initEmptyGrid()
+
         uploadFeedback.text = "正在同步时段位图数据..."
         uploadFeedback.color = "#F57C00"
 
-        var targetClassName = ""
-        if (isManager) {
-            targetClassName = currentSelectedClass
-            if (targetClassName === "") return
-        } else {
-            targetClassName = mainWindow.currentUser.class_name || ""
-        }
-
-        console.log("正在拉取课表规则，目标班级/用户空间:", targetClassName)
+        console.log("DEBUG: TargetSchedule loadTargetSchedule sending GET_CLASS_TEMPLATE — targetClassName=[" + targetClassName + "] isPublic=" + isPublicFlag + " currentMode=" + currentMode)
         NetworkClient.sendRequest("GET_CLASS_TEMPLATE", {
-            "class_name": targetClassName
+            "class_name": targetClassName,
+            "user_id": mainWindow.currentUser.user_id,
+            "is_public": isPublicFlag
         })
     }
 
     function injectCoursesToGrid(courses) {
-        if (!courses || !Array.isArray(courses)) return
-        initEmptyGrid()
+        console.log("VERIFY injectCoursesToGrid ENTER — courses.length:", courses ? courses.length : 0, "scheduleModel.count BEFORE init:", scheduleModel.count)
 
+        if (!courses || !Array.isArray(courses)) {
+            uploadFeedback.text = "当前班级无课表，请在下方手动排课"
+            uploadFeedback.color = "#C62828"
+            return
+        }
+
+        initEmptyGrid()
+        console.log("VERIFY injectCoursesToGrid AFTER initEmptyGrid — scheduleModel.count:", scheduleModel.count)
+
+        var injectedCount = 0
         for (var c = 0; c < courses.length; ++c) {
             var t = courses[c]
             var d = (t.day_of_week || 1) - 1
@@ -121,18 +159,32 @@ Item {
                 scheduleModel.setProperty(cellIndex, "start_week",  t.start_week  || 1)
                 scheduleModel.setProperty(cellIndex, "end_week",    t.end_week    || 16)
                 scheduleModel.setProperty(cellIndex, "week_type",   t.week_type   || 0)
+                if (t.time_mask !== undefined) {
+                    scheduleModel.setProperty(cellIndex, "time_mask", t.time_mask)
+                }
+                injectedCount++
             }
         }
-        uploadFeedback.text = "⚡ 成功载入基线课表规则，共 " + courses.length + " 项。"
-        uploadFeedback.color = "#1565C0"
+
+        console.log("VERIFY injectCoursesToGrid DONE — injectedCount:", injectedCount, "scheduleModel.count:", scheduleModel.count)
+
+        if (courses.length === 0) {
+            uploadFeedback.text = "当前班级无课表，请在下方手动排课"
+            uploadFeedback.color = "#C62828"
+            console.log("DEBUG: GET_CLASS_TEMPLATE returned empty courses array — 当前班级无课表")
+        } else {
+            uploadFeedback.text = "⚡ 成功载入课表规则，共 " + courses.length + " 项。"
+            uploadFeedback.color = "#1565C0"
+            console.log("DEBUG: Injecting", courses.length, "courses to grid — 数据已传达至 UI 层")
+        }
     }
 
     Component.onCompleted: {
-        if (!isManager) {
-            loadTargetSchedule()
-        } else if (NetworkClient.connected) {
-            NetworkClient.sendRequest("GET_REGISTERED_CLASSES", {})
-        }
+        // 组件实例化不作为数据加载触发点。
+        // 所有课表加载请求仅由以下三个场景触发：
+        //   1. mainWindow.userDataReady 信号（登录成功后 currentUser 已完整填充）
+        //   2. classSelector.currentIndex 手动切换（仅在 currentMode === "public" 时）
+        //   3. UPLOAD_SCHEDULE 保存成功后自动重载
     }
 
     // ================================================================
@@ -175,8 +227,10 @@ Item {
                         onCurrentIndexChanged: {
                             var item = adminClassModel.get(currentIndex)
                             if (item) {
-                                root.currentSelectedClass = item.name
-                                root.loadTargetSchedule()
+                                root.currentSelectedClass = String(item.name).trim()
+                                if (root.currentMode === "public") {
+                                    root.loadTargetSchedule()
+                                }
                             }
                         }
                     }
@@ -197,7 +251,8 @@ Item {
                         text: "套用班级课表到全班 🚀"
                         enabled: classSelector.currentIndex >= 0
                         onClicked: {
-                            var cls = classSelector.currentText
+                            var cls = String(classSelector.currentText).trim();
+                            console.log("DEBUG: Sending BATCH_APPLY with class_name: [" + cls + "] length:", cls.length);
                             uploadFeedback.text = "正在将 " + cls + " 的课表模板批量下发至全班成员..."
                             uploadFeedback.color = "#F57C00"
                             NetworkClient.sendRequest("BATCH_APPLY_CLASS_TEMPLATE", {
@@ -220,18 +275,83 @@ Item {
             }
         }
 
+        // ---- 课表模式切换（仅管理层可见） ----
+        RowLayout {
+            Layout.fillWidth: true
+            visible: root.isManager
+            spacing: 16
+
+            Text {
+                text: "📌 课表模式:"
+                font.pixelSize: 13
+                font.bold: true
+                color: "#E65100"
+            }
+
+            RadioButton {
+                text: "👤 个人课表"
+                checked: root.currentMode === "private"
+                onCheckedChanged: {
+                    if (checked) {
+                        root.currentMode = "private"
+                        root.loadTargetSchedule()
+                    }
+                }
+            }
+
+            RadioButton {
+                text: "🏫 班级公共课表"
+                checked: root.currentMode === "public"
+                onCheckedChanged: {
+                    if (checked) {
+                        root.currentMode = "public"
+                        root.loadTargetSchedule()
+                    }
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+        }
+
         // ---- 基础文案说明 ----
         Text {
-            text: root.isManager ? "📌 正在设定【" + root.currentSelectedClass + "】班级的统一课表" : "📆 我的全学期个人课表管理"
-            font.pixelSize: 18
+            text: {
+                var cn = String(mainWindow.currentUser.class_name || "").trim()
+                if (!mainWindow.isLoggedIn) return "🏫 所属班级: 请先登录"
+                if (cn === "") return "🏫 所属班级: 班级信息获取中…"
+                return "🏫 所属班级: " + cn
+            }
+            font.pixelSize: 13
             font.bold: true
-            color: root.isManager ? "#E65100" : "#1B5E20"
+            color: {
+                var cn = String(mainWindow.currentUser.class_name || "").trim()
+                if (!mainWindow.isLoggedIn || cn === "") return "#C62828"
+                return "#1565C0"
+            }
+            Layout.fillWidth: true
         }
 
         Text {
             text: root.isManager
-                  ? "管理员须知：在此处排定的课程将直接作为该班的公共专业课，全体班级成员导入时会自动继承。"
-                  : "队员须知：系统已自动为你加载了你所在班级的基础公共课表。如果你有其他选修课或私事冲突，请直接在下方继续勾选并提交。"
+                  ? (root.currentMode === "public"
+                     ? "📌 正在设定【" + String(root.currentSelectedClass).trim() + "】班级公共课表"
+                     : "📅 我的个人课表管理")
+                  : "📆 我的全学期个人课表管理"
+            font.pixelSize: 18
+            font.bold: true
+            color: root.isManager
+                   ? (root.currentMode === "public" ? "#E65100" : "#1565C0")
+                   : "#1B5E20"
+        }
+
+        Text {
+            text: {
+                if (!root.isManager)
+                    return "队员须知：系统已自动为你加载了你所在班级的基础公共课表。如果你有其他选修课或私事冲突，请直接在下方继续勾选并提交。"
+                if (root.currentMode === "public")
+                    return "管理员须知：在此处排定的课程将作为该班的公共专业课，全体班级成员导入时会自动继承。"
+                return "管理员须知：你正在编辑个人课表。如需编辑班级公共课表，请在上方切换到「🏫 班级公共课表」模式。"
+            }
             font.pixelSize: 12
             color: "#666666"
             wrapMode: Text.Wrap
@@ -276,7 +396,7 @@ Item {
                 Grid {
                     columns: 5; spacing: 4
                     Repeater {
-                        model: scheduleModel
+                        model: { console.log("VERIFY Grid model count:", scheduleModel.count); return scheduleModel }
                         Rectangle {
                             width: 85; height: 44
                             color: model.has_course ? "#FFEBEE" : "#E8F5E9"
@@ -332,23 +452,30 @@ Item {
 
         // ---- 提交打包核心区域 ----
         Button {
-            text: root.isManager ? "💾 保存并发布当前班级基础课表" : "🚀 提交并封存我的个人课表"
-            enabled: NetworkClient.connected
+            text: root.isManager
+                  ? (root.currentMode === "public"
+                     ? "💾 保存并发布班级公共课表"
+                     : "💾 保存我的个人课表")
+                  : "🚀 提交并封存我的个人课表"
+            enabled: {
+                if (!NetworkClient.connected) return false
+                if (root.isManager && root.currentMode === "public" && String(root.currentSelectedClass).trim() === "")
+                    return false
+                return true
+            }
             Layout.fillWidth: true
             Layout.preferredHeight: 40
 
             onClicked: {
                 var payload = compileCoursesPayload()
                 var requestData = {
-                    "user_id": mainWindow.currentUser.user_id,
-                    "courses": payload
+                    "user_id":    mainWindow.currentUser.user_id,
+                    "courses":    payload,
+                    "is_public":  (root.isManager && root.currentMode === "public")
                 }
-
-                // 🟢 关键差异化打包：如果是管理层，加入 target_class 字段告诉后端写公共模板
-                if (root.isManager) {
-                    requestData["target_class"] = root.currentSelectedClass
+                if (root.isManager && root.currentMode === "public") {
+                    requestData["target_class"] = String(root.currentSelectedClass).trim()
                 }
-
                 console.log("[DEBUG WIRE] UPLOAD_SCHEDULE sending packet:", JSON.stringify(requestData))
                 NetworkClient.sendRequest("UPLOAD_SCHEDULE", requestData)
             }
@@ -427,6 +554,24 @@ Item {
         return arr
     }
 
+    // ================================================================
+    // 唯一数据加载驱动入口：mainWindow.userDataReady 信号
+    // 登录成功后 currentUser（含 class_name）已完整填充，此时加载课表
+    // ================================================================
+    Connections {
+        target: mainWindow
+
+        function onUserDataReady() {
+            console.log("DEBUG: TargetSchedule userDataReady received — class_name=[" + String(mainWindow.currentUser.class_name || "").trim() + "]")
+            root.loadTargetSchedule()
+
+            // 管理员同步拉取班级下拉列表
+            if (root.isManager && adminClassModel.count === 0 && NetworkClient.connected) {
+                NetworkClient.sendRequest("GET_REGISTERED_CLASSES", {})
+            }
+        }
+    }
+
     Connections {
         target: NetworkClient
 
@@ -439,12 +584,23 @@ Item {
 
         function onResponseReceived(action, data) {
             if (action === "GET_CLASS_TEMPLATE" || data.action === "GET_CLASS_TEMPLATE") {
+                root.isLoading = false  // 释放防重入锁
+
                 if (data.status === "ok" && data.data && data.data.courses) {
-                    root.injectCoursesToGrid(data.data.courses)
+                    var courses = data.data.courses
+                    if (courses.length === 0) {
+                        root.initEmptyGrid()
+                        uploadFeedback.text = "当前暂无课表记录，请点击下方进行排课"
+                        uploadFeedback.color = "#78909C"
+                        console.log("DEBUG: GET_CLASS_TEMPLATE returned empty courses array")
+                    } else {
+                        root.injectCoursesToGrid(courses)
+                    }
                 } else {
                     root.initEmptyGrid()
-                    uploadFeedback.text = "暂无班级基线模板数据，当前为白纸看板。"
+                    uploadFeedback.text = "当前暂无课表记录，请点击下方进行排课"
                     uploadFeedback.color = "#78909C"
+                    console.log("DEBUG: GET_CLASS_TEMPLATE failed or no data — " + (data.message || "no message"))
                 }
             }
             if (action === "GET_REGISTERED_CLASSES" || data.action === "GET_REGISTERED_CLASSES") {
@@ -456,7 +612,7 @@ Item {
                     }
                     if (adminClassModel.count > 0) {
                         classSelector.currentIndex = 0
-                        root.currentSelectedClass = adminClassModel.get(0).name
+                        root.currentSelectedClass = String(adminClassModel.get(0).name).trim()
                     }
                     uploadFeedback.text = "已加载 " + classes.length + " 个已注册班级"
                     uploadFeedback.color = "#1565C0"
@@ -467,10 +623,12 @@ Item {
             }
             if (action === "UPLOAD_SCHEDULE" || data.action === "UPLOAD_SCHEDULE") {
                 if (data.status === "ok") {
-                    uploadFeedback.text = "🟢 数据同步封存成功！策略已在全球集群实时生效。"
+                    uploadFeedback.text = "🟢 数据同步封存成功！"
                     uploadFeedback.color = "#2E7D32"
+                    // 不再回读后端 GET_CLASS_TEMPLATE（后端该接口返回空数组，会清空网格）
+                    // 当前 scheduleModel 即为刚保存的数据，直接保留
                 } else {
-                    uploadFeedback.text = "❌ 存储出错: " + data.message
+                    uploadFeedback.text = "❌ 存储出错: " + (data.message || "未知错误")
                     uploadFeedback.color = "#C62828"
                 }
             }
