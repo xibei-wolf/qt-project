@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 // NetworkClient.cpp — 青云志愿服务队管理系统 · 网络客户端实现
 //
 // 非对称网关协议：
@@ -160,21 +160,7 @@ QString NetworkClient::readLocalFileGbk(const QString& path)
     if (raw.isEmpty())
         return {};
 
-    {
-        QStringDecoder utf8Decoder(QStringDecoder::Utf8);
-        QString decoded = utf8Decoder.decode(raw);
-        if (!decoded.contains(QChar::ReplacementCharacter))
-            return decoded;
-    }
-
-    {
-        QStringDecoder gbkDecoder("GB18030");
-        if (gbkDecoder.isValid()) {
-            return gbkDecoder.decode(raw);
-        }
-    }
-
-    return QString::fromLatin1(raw);
+    return QString::fromUtf8(raw);
 }
 
 // ============================================================================

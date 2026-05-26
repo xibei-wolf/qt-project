@@ -102,11 +102,11 @@ function buildCalendarGrid(year, month) {
     var totalDays = daysInMonth(year, month)
     var grid = []
 
-    // 上月填充
+    // 上月填充（firstDow=1表示周一，前面没有上月日期）
     var prevMonth = month === 1 ? 12 : month - 1
     var prevYear = month === 1 ? year - 1 : year
     var prevDays = daysInMonth(prevYear, prevMonth)
-    for (var i = firstDow - 1; i >= 0; i--) {
+    for (var i = firstDow - 2; i >= 0; i--) {
         grid.push({
             day: prevDays - i,
             date: new Date(prevYear, prevMonth - 1, prevDays - i),

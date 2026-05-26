@@ -1,8 +1,9 @@
 ﻿import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Controls.Basic
 
-Window {
+ApplicationWindow {
     id: mainWindow
     width: 1200
     height: 800
@@ -265,7 +266,7 @@ Window {
 
                 Text {
                     text: isLoggedIn
-                          ? roleLabel(currentUser.role_id) + " · " + currentUser.name + " (" + currentUser.student_id + ")"
+                          ? roleLabel(currentUser.role_id) + " · " + currentUser.name + " (" + currentUser.student_id + ")" + (currentUser.class_name ? " · " + currentUser.class_name : "")
                           : ""
                     font.pixelSize: 12
                     font.bold: true

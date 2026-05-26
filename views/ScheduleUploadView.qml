@@ -247,28 +247,30 @@ Item {
                         }
                     }
 
-                    Button {
-                        text: "套用班级课表到全班 🚀"
-                        enabled: classSelector.currentIndex >= 0
-                        onClicked: {
-                            var cls = String(classSelector.currentText).trim();
-                            console.log("DEBUG: Sending BATCH_APPLY with class_name: [" + cls + "] length:", cls.length);
-                            uploadFeedback.text = "正在将 " + cls + " 的课表模板批量下发至全班成员..."
-                            uploadFeedback.color = "#F57C00"
-                            NetworkClient.sendRequest("BATCH_APPLY_CLASS_TEMPLATE", {
-                                "class_name": cls
-                            })
-                        }
-                        background: Rectangle {
-                            color: parent.enabled ? "#1565C0" : "#90A4AE"
-                            radius: 4
-                        }
-                        contentItem: Text {
-                            text: parent.text
+                    Rectangle {
+                        width: 180
+                        height: 32
+                        radius: 4
+                        color: classSelector.currentIndex >= 0 ? "#1565C0" : "#90A4AE"
+                        Text {
+                            anchors.centerIn: parent
+                            text: "套用班级课表到全班 🚀"
                             color: "white"
                             font.pixelSize: 12
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
+                            font.bold: true
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: classSelector.currentIndex >= 0
+                            onClicked: {
+                                var cls = String(classSelector.currentText).trim();
+                                console.log("DEBUG: Sending BATCH_APPLY with class_name: [" + cls + "] length:", cls.length);
+                                uploadFeedback.text = "正在将 " + cls + " 的课表模板批量下发至全班成员..."
+                                uploadFeedback.color = "#F57C00"
+                                NetworkClient.sendRequest("BATCH_APPLY_CLASS_TEMPLATE", {
+                                    "class_name": cls
+                                })
+                            }
                         }
                     }
                 }
@@ -360,11 +362,11 @@ Item {
 
         // ---------- 5 × 6 网格渲染区域 (保持原先优良的 Grid 表现) ----------
         RowLayout {
-            spacing: 4
+            spacing: 6
             // 左侧时间标签
             Column {
-                spacing: 4
-                Rectangle { width: 60; height: 32; color: "transparent" }
+                spacing: 6
+                Rectangle { width: 70; height: 34; color: "transparent" }
                 Repeater {
                     model: [
                         "第1-2节\n" + periodTimeLabel(0),
@@ -375,38 +377,70 @@ Item {
                         "第11-12节\n" + periodTimeLabel(5)
                     ]
                     Rectangle {
-                        width: 60; height: 44; color: "#ECEFF1"; radius: 4
-                        Text { anchors.centerIn: parent; text: modelData; font.pixelSize: 9; horizontalAlignment: Text.AlignHCenter; color: "#546E7A" }
+                        width: 70; height: 46; color: "#ECEFF1"; radius: 4
+                        border.color: "#CFD8DC"
+                        Text { 
+                            anchors.centerIn: parent 
+                            text: modelData 
+                            font.pixelSize: 10 
+                            horizontalAlignment: Text.AlignHCenter 
+                            verticalAlignment: Text.AlignVCenter
+                            color: "#546E7A"
+                            wrapMode: Text.Wrap
+                        }
                     }
                 }
             }
             // 右侧课表主体
             Column {
-                spacing: 4
+                spacing: 6
                 Row {
-                    spacing: 4
+                    spacing: 6
                     Repeater {
                         model: ["周一", "周二", "周三", "周四", "周五"]
                         Rectangle {
-                            width: 85; height: 32; color: "#1565C0"; radius: 4
-                            Text { anchors.centerIn: parent; text: modelData; color: "white"; font.bold: true; font.pixelSize: 12 }
+                            width: 95; height: 34; color: "#1565C0"; radius: 4
+                            Text { anchors.centerIn: parent; text: modelData; color: "white"; font.bold: true; font.pixelSize: 13 }
                         }
                     }
                 }
                 Grid {
-                    columns: 5; spacing: 4
+                    columns: 5; spacing: 6
                     Repeater {
-                        model: { console.log("VERIFY Grid model count:", scheduleModel.count); return scheduleModel }
+                        model: scheduleModel
                         Rectangle {
-                            width: 85; height: 44
+                            width: 95; height: 46
                             color: model.has_course ? "#FFEBEE" : "#E8F5E9"
                             radius: 4
                             border.color: model.has_course ? "#FFCDD2" : "#C8E6C9"
+                            border.width: 1
+
+                            // 有课时点击格子任意位置即可编辑
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: model.has_course
+                                onClicked: {
+                                    editingCellIndex = index
+                                    var cell = scheduleModel.get(index)
+                                    editCourseName.text = cell.course_name || ""
+                                    editStartWeek.value = cell.start_week || 1
+                                    editEndWeek.value = cell.end_week || 16
+                                    editWeekType.currentIndex = cell.week_type || 0
+                                    courseEditDialog.open()
+                                }
+                            }
 
                             RowLayout {
-                                anchors.centerIn: parent; spacing: 1
+                                anchors.fill: parent
+                                anchors.leftMargin: 4
+                                anchors.rightMargin: 4
+                                anchors.topMargin: 2
+                                anchors.bottomMargin: 2
+                                spacing: 4
                                 CheckBox {
                                     checked: model.has_course
+                                    Layout.preferredWidth: 22
+                                    Layout.preferredHeight: 22
                                     onCheckedChanged: {
                                         scheduleModel.setProperty(index, "has_course", checked)
                                         if (!checked) {
@@ -415,25 +449,13 @@ Item {
                                     }
                                 }
                                 Text {
-                                    text: model.has_course && model.course_name !== "" ? model.course_name : (model.has_course ? "(有课)" : "空闲")
-                                    font.pixelSize: 10
+                                    text: model.has_course && model.course_name !== "" ? model.course_name : (model.has_course ? "有课 ✏" : "空闲")
+                                    font.pixelSize: 11
                                     color: model.has_course ? "#C62828" : "#2E7D32"
-                                    Layout.preferredWidth: 36
+                                    Layout.fillWidth: true
                                     elide: Text.ElideRight
-                                }
-                                Button {
-                                    visible: model.has_course
-                                    Layout.preferredWidth: 16; Layout.preferredHeight: 16
-                                    flat: true
-                                    text: "✏"
-                                    onClicked: {
-                                        editingCellIndex = index
-                                        editCourseName.text = model.course_name || ""
-                                        editStartWeek.value = model.start_week || 1
-                                        editEndWeek.value = model.end_week || 16
-                                        editWeekType.currentIndex = model.week_type || 0
-                                        courseEditDialog.open()
-                                    }
+                                    horizontalAlignment: Text.AlignLeft
+                                    verticalAlignment: Text.AlignVCenter
                                 }
                             }
                         }
@@ -451,37 +473,48 @@ Item {
         }
 
         // ---- 提交打包核心区域 ----
-        Button {
-            text: root.isManager
-                  ? (root.currentMode === "public"
-                     ? "💾 保存并发布班级公共课表"
-                     : "💾 保存我的个人课表")
-                  : "🚀 提交并封存我的个人课表"
-            enabled: {
+        Rectangle {
+            id: submitBtn
+            property bool enabled: {
                 if (!NetworkClient.connected) return false
                 if (root.isManager && root.currentMode === "public" && String(root.currentSelectedClass).trim() === "")
                     return false
                 return true
             }
             Layout.fillWidth: true
-            Layout.preferredHeight: 40
+            Layout.preferredHeight: 44
+            radius: 6
+            color: submitBtn.enabled ? "#2E7D32" : "#90A4AE"
 
-            onClicked: {
-                var payload = compileCoursesPayload()
-                var requestData = {
-                    "user_id":    mainWindow.currentUser.user_id,
-                    "courses":    payload,
-                    "is_public":  (root.isManager && root.currentMode === "public")
-                }
-                if (root.isManager && root.currentMode === "public") {
-                    requestData["target_class"] = String(root.currentSelectedClass).trim()
-                }
-                console.log("[DEBUG WIRE] UPLOAD_SCHEDULE sending packet:", JSON.stringify(requestData))
-                NetworkClient.sendRequest("UPLOAD_SCHEDULE", requestData)
+            Text {
+                anchors.centerIn: parent
+                text: root.isManager
+                      ? (root.currentMode === "public"
+                         ? "💾 保存并发布班级公共课表"
+                         : "💾 保存我的个人课表")
+                      : "🚀 提交并封存我的个人课表"
+                color: "white"
+                font.bold: true
+                font.pixelSize: 14
             }
 
-            background: Rectangle { color: parent.enabled ? "#2E7D32" : "#90A4AE"; radius: 4 }
-            contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            MouseArea {
+                anchors.fill: parent
+                enabled: submitBtn.enabled
+                onClicked: {
+                    var payload = compileCoursesPayload()
+                    var requestData = {
+                        "user_id":    mainWindow.currentUser.user_id,
+                        "courses":    payload,
+                        "is_public":  (root.isManager && root.currentMode === "public")
+                    }
+                    if (root.isManager && root.currentMode === "public") {
+                        requestData["target_class"] = String(root.currentSelectedClass).trim()
+                    }
+                    console.log("[DEBUG WIRE] UPLOAD_SCHEDULE sending packet:", JSON.stringify(requestData))
+                    NetworkClient.sendRequest("UPLOAD_SCHEDULE", requestData)
+                }
+            }
         }
     }
 
@@ -491,9 +524,11 @@ Item {
     Dialog {
         id: courseEditDialog
         title: "编辑课程详细策略"
-        modal: true; width: 320; height: 300
+        modal: true; width: 500; height: 300
         ColumnLayout {
             anchors.fill: parent; spacing: 10
+            anchors.margins: 14
+
             Text {
                 text: editingCellIndex >= 0
                       ? "时段: " + (scheduleModel.get(editingCellIndex).time_label || "")

@@ -1,4 +1,4 @@
-﻿import QtQuick
+import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
@@ -127,6 +127,8 @@ Item {
             append({ text: "办公室", did: 3 })
             append({ text: "宣传部", did: 4 })
             append({ text: "云教室", did: 5 })
+            append({ text: "待定",   did: 6 })
+            append({ text: "无部门", did: 0 })
         }
     }
 
@@ -151,6 +153,9 @@ Item {
             default: return "#F5F5F5"
         }
     }
+
+    // ---- 手动添加弹窗：老师角色无班级信息 ----
+    property bool addClassFieldsVisible: true
 
     // ---- 批量除名模式 ----
     property bool batchDeleteMode: false
@@ -438,6 +443,7 @@ Item {
                     addPasswordField.text = ""
                     addMajorField.text = ""
                     addClassNameField.text = ""
+                    addClassFieldsVisible = true
                     addRoleCombo.currentIndex = 3
                     addDeptCombo.currentIndex = 0
                     addMemberErrorText.text = ""
@@ -980,7 +986,10 @@ Item {
                     id: addStudentIdField
                     Layout.fillWidth: true
                     font.pixelSize: 13
-                    placeholderText: "2026001"
+                    placeholderText: {
+                        var item = addRoleModel.get(addRoleCombo.currentIndex)
+                        return item && item.rid === 10 ? "工号" : "2026001"
+                    }
                 }
             }
 
@@ -1001,9 +1010,10 @@ Item {
                 }
             }
 
-            // 专业
+            // 专业（老师角色隐藏）
             RowLayout {
                 spacing: 8
+                visible: addClassFieldsVisible
                 Text {
                     text: "专业："
                     font.pixelSize: 13
@@ -1017,9 +1027,10 @@ Item {
                 }
             }
 
-            // 班级
+            // 班级（老师角色隐藏）
             RowLayout {
                 spacing: 8
+                visible: addClassFieldsVisible
                 Text {
                     text: "班级："
                     font.pixelSize: 13
@@ -1047,6 +1058,22 @@ Item {
                     textRole: "text"
                     model: addRoleModel
                     currentIndex: 3
+                    onCurrentIndexChanged: {
+                        var item = addRoleModel.get(currentIndex)
+                        if (item && (item.rid === 10 || item.rid === 20)) {
+                            // 老师/队长：不隶属任何部门，自动切到"无部门"
+                            addDeptCombo.currentIndex = 6
+
+                            // "无部门"
+                            addClassFieldsVisible = (item.rid !== 10)  // 仅老师隐藏班级信息
+                        } else {
+                            addClassFieldsVisible = true
+                            // 如果之前选了"无部门"，切回首项
+                            if (addDeptCombo.currentIndex === 6) {
+                                addDeptCombo.currentIndex = 0
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1086,13 +1113,17 @@ Item {
                     var name = addNameField.text.trim()
                     var sid  = addStudentIdField.text.trim()
                     var pwd  = addPasswordField.text.trim()
+                    var roleItem = addRoleModel.get(addRoleCombo.currentIndex)
+                    var isTeacher = (roleItem.rid === 10)
 
-                    if (name === "" || sid === "" || pwd === "") {
-                        addMemberErrorText.text = "姓名、学号和密码均不能为空"
+                    // 老师仅需姓名+密码；其他角色还需学号
+                    if (name === "" || pwd === "" || (!isTeacher && sid === "")) {
+                        addMemberErrorText.text = isTeacher
+                            ? "姓名和密码不能为空"
+                            : "姓名、学号和密码均不能为空"
                         return
                     }
 
-                    var roleItem = addRoleModel.get(addRoleCombo.currentIndex)
                     var deptItem = addDeptModel.get(addDeptCombo.currentIndex)
 
                     addMemberSubmitBtn.enabled = false
@@ -1105,9 +1136,9 @@ Item {
                             "student_id":    sid,
                             "password":      pwd,
                             "role_id":       roleItem.rid,
-                            "department_id": deptItem.did,
-                            "major":         addMajorField.text.trim(),
-                            "class_name":    addClassNameField.text.trim()
+                            "department_id": deptItem.did === 0 ? 8 : deptItem.did,
+                            "major":         isTeacher ? "" : addMajorField.text.trim(),
+                            "class_name":    isTeacher ? "" : addClassNameField.text.trim()
                         }]
                     })
                 }

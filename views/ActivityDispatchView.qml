@@ -582,6 +582,7 @@ Item {
                     visible: activityCombo.currentIndex >= 0
                     text: {
                         var p = activityPresetModel.get(activityCombo.currentIndex)
+                        if (!p) return ""
                         return "筛选: W" + (p.activityWeek || "?")
                                + " D" + (p.startDate
                                    ? EventLogic.dayOfWeek(EventLogic.parseDate(p.startDate))
@@ -589,7 +590,7 @@ Item {
                                + " mask=" + (p.timeMask || "?")
                                + "  " + (p.startDate || "?")
                                + " " + (p.startTime || "") + "-" + (p.endTime || "")
-                               + " · " + p.name
+                               + " · " + (p.name || "")
                                + " [id=" + (p.db_id || "—") + "]"
                     }
                     font.pixelSize: 11
